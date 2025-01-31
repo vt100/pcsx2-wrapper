@@ -15,17 +15,19 @@ RESTIC_CMD="" # Will be constructed later
 HELP_STRING=$(cat <<EOF
 Usage: $0 [options]
 
-This script syncs PCSX2 memory cards to a cloud storage using restic.
+This script syncs/restores PCSX2 memory cards using restic.
 
 Options:
   -h, --help      Show this help message and exit.
   -r <repo>, --repo <repo>    Path to the restic repository. (Required)
   -p <password>, --password <password>  Password for the restic repository. (Required)
-    -m <dir>, --memcard-dir <dir>  Path to the PCSX2 memcard directory. (Optional, defaults to ~/.config/PCSX2/memcards)
+  -m <dir>, --memcard-dir <dir>  Path to the PCSX2 memcard directory. (Optional, defaults to ~/.config/PCSX2/memcards)
+  --restore       Restore memory cards from the latest snapshot.
 
 Examples:
   $0 -r /path/to/repo -p mysecretpassword
   $0 --repo sftp://user@host/repo --password mysecretpassword -m /path/to/memcards
+  $0 -r /path/to/repo -p mypassword --restore
 
 EOF
 )
@@ -56,8 +58,26 @@ sync_memcards() {
   fi
 }
 
+restore_memcards() {
+  log_message "Restoring memory cards from restic..."
+
+  latest_snapshot=$(eval "$RESTIC_CMD snapshots --latest")
+
+  if [[ -n "$latest_snapshot" ]]; then
+    if eval "$RESTIC_CMD restore "$latest_snapshot" --target "$MEMCARD_DIR" --exclude "$MEMCARD_DIR/.locks/*" --force; then
+      log_message "Memory cards restored successfully from snapshot $latest_snapshot."
+    else
+      log_message "Error restoring memory cards. Check the logs and your restic setup."
+      exit 1
+    fi
+  else
+    log_message "No snapshots found in the repository."
+    exit 1
+  fi
+}
 
 # --- Parse Command-Line Arguments ---
+RESTIC_OPERATION="" # Initialize
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help)
@@ -71,9 +91,13 @@ while [[ $# -gt 0 ]]; do
       RESTIC_PASSWORD="$2"
       shift 2
       ;;
-        -m|--memcard-dir)
+    -m|--memcard-dir)
       MEMCARD_DIR="$2"
       shift 2
+      ;;
+    --restore)
+      RESTIC_OPERATION="restore"
+      shift
       ;;
     *)
       echo "Invalid option: $1" >&2
@@ -81,7 +105,6 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-
 
 # --- Check for Required Arguments ---
 if [[ -z "$RESTIC_REPO" || -z "$RESTIC_PASSWORD" ]]; then
@@ -92,10 +115,11 @@ fi
 # --- Construct restic command ---
 RESTIC_CMD="restic -r \"$RESTIC_REPO\" -p \"$RESTIC_PASSWORD\""
 
-
 # --- Main Script ---
 
-if pgrep -x "$PCSX2_EXE" > /dev/null; then
+if [[ "$RESTIC_OPERATION" == "restore" ]]; then
+  restore_memcards
+elif pgrep -x "$PCSX2_EXE" > /dev/null; then
   log_message "$PCSX2 is currently running. Skipping pre-game sync."
 else
   sync_memcards
@@ -109,7 +133,9 @@ else
   exit 1
 fi
 
-sync_memcards
+if [[ -z "$RESTIC_OPERATION" ]]; then
+  sync_memcards
+fi
 
 log_message "Script finished."
 
